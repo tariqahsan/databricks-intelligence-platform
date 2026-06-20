@@ -1,0 +1,29 @@
+# Force LF line endings for shell scripts regardless of platform.
+# Prevents Windows checkouts (and editors with autocrlf=true) from
+# reintroducing CRLF, which breaks `set -e` and other bash parsing
+# inside Linux containers (e.g. oe-jupyter's before-notebook.d hook).
+*.sh text eol=lf
+
+# Docker / compose files should also stay LF for consistency across
+# Windows/Mac/Linux dev machines.
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Common text files — normalize but let git decide LF vs CRLF based
+# on OS (safe default for everything else: Python, configs, docs).
+*.py text
+*.md text
+*.txt text
+*.json text
+*.cfg text
+*.conf text
+
+# Explicitly mark binary files so git never attempts line-ending
+# conversion or diffing on them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.jar binary
+*.zip binary

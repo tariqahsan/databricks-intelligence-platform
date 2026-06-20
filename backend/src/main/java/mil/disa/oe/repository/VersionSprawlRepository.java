@@ -1,0 +1,124 @@
+package mil.disa.oe.repository;
+
+import mil.disa.oe.config.TableNames;
+import mil.disa.oe.dto.*;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
+import org.springframework.stereotype.Repository;
+
+import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Collections;
+import java.util.List;
+
+/** Source: DataNX (Network Device & Port Inventory) */
+@Repository
+public class VersionSprawlRepository {
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final TableNames tables;
+
+    public VersionSprawlRepository(NamedParameterJdbcTemplate jdbc, TableNames tables) {
+        this.jdbc   = jdbc;
+        this.tables = tables;
+    }
+
+    // ── Hive JDBC compatibility helpers ───────────────────────────────────
+    //
+    // 1. DOUBLE columns: Hive returns java.lang.Double, not BigDecimal.
+    //    Fix: bd() reads via getDouble() and wraps in BigDecimal.valueOf().
+    //
+    // 2. NULL aggregates: SQL COUNT/SUM return NULL when 0 rows match
+    //    (e.g. WHERE snapshot_date = current_date() with stale mock data).
+    //    Calling ((Number) null).intValue() throws NullPointerException.
+    //    Fix: safeInt() and safeLong() return 0 for null values.
+
+    private static BigDecimal bd(ResultSet rs, String col) throws SQLException {
+        double v = rs.getDouble(col);
+        return rs.wasNull() ? null : BigDecimal.valueOf(v);
+    }
+
+    private static BigDecimal bd(Object val) {
+        if (val == null) return null;
+        if (val instanceof BigDecimal b) return b;
+        return BigDecimal.valueOf(((Number) val).doubleValue());
+    }
+
+    private static int safeInt(Object val) {
+        return val == null ? 0 : ((Number) val).intValue();
+    }
+
+    private static long safeLong(Object val) {
+        return val == null ? 0L : ((Number) val).longValue();
+    }
+
+    @Retryable(retryFor = Exception.class, maxAttempts = 3,
+               backoff = @Backoff(delay = 2000, multiplier = 2.0))
+    public VersionSprawlKpis getKpis() {
+        String kpiSql = """
+            SELECT
+                COUNT(DISTINCT software_name)                             AS total_products,
+                COUNT(DISTINCT CASE WHEN version_count > 3
+                               THEN software_name END)                    AS with_sprawl,
+                ROUND(AVG(version_count), 1)                             AS avg_versions,
+                SUM(CASE WHEN is_latest AND software_type = 'OS'
+                         THEN device_count ELSE 0 END)                   AS on_latest_os,
+                SUM(CASE WHEN NOT is_supported
+                         THEN device_count ELSE 0 END)                   AS unsupported_os,
+                COUNT(DISTINCT CASE WHEN has_vulnerabilities
+                               THEN software_name END)                   AS apps_with_cves
+            FROM %s
+            WHERE snapshot_date = current_date()
+            """.formatted(tables.versionSprawlSummary());
+
+        String worstSql = """
+            SELECT software_name, version_count,
+                   SUM(device_count) AS device_count,
+                   MAX(CASE WHEN is_latest THEN version ELSE NULL END) AS latest_version,
+                   ROUND(SUM(CASE WHEN is_latest THEN device_count ELSE 0 END)
+                         * 100.0 / NULLIF(SUM(device_count),0), 1) AS pct_on_latest
+            FROM %s
+            WHERE snapshot_date = current_date()
+            GROUP BY software_name, version_count
+            ORDER BY version_count DESC
+            LIMIT 10
+            """.formatted(tables.versionSprawlSummary());
+
+        String osVerSql = """
+            SELECT software_name AS name, version, device_count AS count,
+                   ROUND(device_count * 100.0
+                         / SUM(device_count) OVER(), 1) AS percentage,
+                   is_supported
+            FROM %s
+            WHERE snapshot_date = current_date()
+              AND software_type = 'OS'
+            ORDER BY device_count DESC
+            LIMIT 15
+            """.formatted(tables.versionSprawlSummary());
+
+        var r = jdbc.queryForMap(kpiSql, Collections.emptyMap());
+
+        List<SprawlByProduct> worst = jdbc.query(worstSql,
+            Collections.emptyMap(), (rs, i) -> new SprawlByProduct(
+                rs.getString("software_name"), rs.getInt("version_count"),
+                rs.getInt("device_count"), rs.getString("latest_version"),
+                bd(rs, "pct_on_latest")));
+
+        List<VersionDistribution> osVer = jdbc.query(osVerSql,
+            Collections.emptyMap(), (rs, i) -> new VersionDistribution(
+                rs.getString("name"), rs.getString("version"),
+                rs.getInt("count"), bd(rs, "percentage"),
+                rs.getBoolean("is_supported")));
+
+        return new VersionSprawlKpis(
+            safeInt(r.get("total_products")),   // ← was ((Number) r.get(...)).intValue()
+            safeInt(r.get("with_sprawl")),
+            bd(r.get("avg_versions")),
+            safeInt(r.get("on_latest_os")),
+            safeInt(r.get("unsupported_os")),
+            safeInt(r.get("apps_with_cves")),
+            worst, osVer, List.of());
+    }
+}
