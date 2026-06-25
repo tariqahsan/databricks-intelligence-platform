@@ -1,5 +1,5 @@
 """
-gold/aggregate_all.py  (v2 — Real Schema Edition)
+gold/aggregate_all.py  (v3 — Netflow Edition)
 GOLD LAYER — Build all product KPI tables from Silver sources.
 
 Gold table names are UNCHANGED — Spring Boot API depends on these:
@@ -11,6 +11,10 @@ Gold table names are UNCHANGED — Spring Boot API depends on these:
   gold/top_issues_summary           → /api/top-issues
   gold/version_sprawl_summary       → /api/version-sprawl
   gold/data_source_ingestion_status → /api/data-sources
+  gold/network_flow_summary         → /api/network-flow
+  gold/network_hub_stats            → /api/network-flow/hubs
+  gold/network_link_latency         → /api/network-flow/links
+  gold/network_path_distribution    → /api/network-flow/paths
 
 Silver source → Gold table:
   silver/app_performance      → app_health_summary
@@ -22,6 +26,10 @@ Silver source → Gold table:
                                 version_sprawl_summary
   silver/netcool_events       → top_issues_summary
   silver/device_metrics       → enriches device_health_summary
+  silver/netflow_flows        → network_flow_summary
+                                network_hub_stats
+                                network_link_latency
+                                network_path_distribution
 """
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
@@ -90,10 +98,9 @@ def gold_network_performance(spark: SparkSession):
     """
     print("\n🥇 GOLD: network_performance_summary + packet_loss_root_cause...")
 
-    flows  = spark.read.format("delta").load(Paths.silver("network_flows"))
-    thput  = spark.read.format("delta").load(Paths.silver("network_throughput"))
+    flows = spark.read.format("delta").load(Paths.silver("network_flows"))
+    thput = spark.read.format("delta").load(Paths.silver("network_throughput"))
 
-    # ── Network performance per host/interface ───────────────────────
     flow_agg = flows.groupBy("host_name", "host_ip", "direction") \
         .agg(
             sum("network_bytes")          .alias("total_bytes"),
@@ -155,15 +162,12 @@ def gold_network_performance(spark: SparkSession):
     net_gold.write.format("delta").mode("overwrite").save(net_path)
     print(f"   ✅ {net_gold.count()} segments → gold.network_performance_summary")
 
-    # ── Packet loss root cause (congested interfaces) ────────────────
     rca = tput_agg.filter(col("congestion_events") > 0) \
         .withColumn("segment_name",    col("segment_id")) \
         .withColumn("root_cause",
             when(col("bandwidth_utilization") > 90, "LINK_SATURATION")
             .when(col("congestion_events") > 20,    "CONGESTION")
             .otherwise("HARDWARE_DEGRADATION")) \
-        .withColumn("packet_loss_rate",
-            col("packet_loss_rate")) \
         .withColumn("affected_flows",  col("congestion_events")) \
         .withColumn("avg_bw_util",     col("bandwidth_utilization")) \
         .withColumn("confidence_score",
@@ -201,7 +205,6 @@ def gold_device_health(spark: SparkSession):
     print("\n🥇 GOLD: device_health_summary (DataNX + DXNETOPS)...")
     inv = spark.read.format("delta").load(Paths.silver("device_inventory"))
 
-    # Aggregate per device (system-level records only)
     systems = inv.filter(col("data_source") == "DATANX_SYSTEM") \
         .groupBy("device_name", "version", "node_type", "ip_address") \
         .agg(
@@ -211,7 +214,6 @@ def gold_device_health(spark: SparkSession):
             max("days_since_update")  .alias("days_since_checkin"),
         )
 
-    # Try to enrich with DXNETOPS utilization
     try:
         metrics = spark.read.format("delta").load(Paths.silver("device_metrics"))
         util_agg = metrics.groupBy("device_name") \
@@ -264,8 +266,6 @@ def gold_dns_metrics(spark: SparkSession):
     """
     Source: silver.network_throughput (Netscout)
     Target: gold.dns_metrics → /api/network-performance/dns
-    Note:   Repurposed as interface/sensor health metrics
-            since real DNS source (Infoblox) is replaced by DataNX.
     """
     print("\n🥇 GOLD: dns_metrics (Netscout interface health)...")
     df = spark.read.format("delta").load(Paths.silver("network_throughput"))
@@ -335,8 +335,7 @@ def gold_top_issues(spark: SparkSession):
         .withColumn("assigned_team",    lit("OE Network Team")) \
         .withColumn("root_cause",       col("event_id")) \
         .withColumn("is_recurring",     col("occurrence_count") > 1) \
-        .withColumn("sla_breached",
-            col("severity") == "P1") \
+        .withColumn("sla_breached",     col("severity") == "P1") \
         .withColumn("snapshot_date",    current_date()) \
         .withColumn("_processed_at",    current_timestamp()) \
         .select("issue_id","title","category","severity","status","source",
@@ -359,14 +358,12 @@ def gold_version_sprawl(spark: SparkSession):
     print("\n🥇 GOLD: version_sprawl_summary (DataNX inventory)...")
     df = spark.read.format("delta").load(Paths.silver("device_inventory"))
 
-    # OS/firmware version sprawl from system records
     systems = df.filter(col("data_source") == "DATANX_SYSTEM") \
         .filter(col("version").isNotNull())
 
     hw_inv = df.filter(col("data_source") == "DATANX_INVENTORY") \
         .filter(col("description").isNotNull())
 
-    # OS versions
     os_versions = systems.groupBy("version") \
         .agg(count("device_name").alias("device_count")) \
         .withColumnRenamed("version", "version_val") \
@@ -374,7 +371,6 @@ def gold_version_sprawl(spark: SparkSession):
         .withColumn("software_type",  lit("FIRMWARE")) \
         .withColumn("version",        col("version_val"))
 
-    # Hardware model sprawl
     hw_versions = hw_inv.groupBy("description", "hw_rev") \
         .agg(count("device_name").alias("device_count")) \
         .withColumn("software_name",  col("description")) \
@@ -382,24 +378,22 @@ def gold_version_sprawl(spark: SparkSession):
         .withColumn("version",
             concat(lit("HW-"), coalesce(col("hw_rev"), lit("X0"))))
 
-    from pyspark.sql import functions as F
+    combined = os_versions.select(
+        "software_name","version","software_type","device_count"
+    ).union(
+        hw_versions.select(
+            "software_name","version","software_type","device_count"
+        )
+    )
 
-    os_combined = os_versions.select(
-        "software_name","version","software_type","device_count")
-    hw_combined = hw_versions.select(
-        "software_name","version","software_type","device_count")
-
-    combined = os_combined.union(hw_combined)
-
-    # Count versions per software_name for sprawl metric
     version_count_win = Window.partitionBy("software_name")
 
     gold = combined \
         .withColumn("version_count",
             count("version").over(version_count_win)) \
-        .withColumn("is_latest",          lit(False)) \
-        .withColumn("is_supported",       lit(True)) \
-        .withColumn("has_vulnerabilities",lit(False)) \
+        .withColumn("is_latest",           lit(False)) \
+        .withColumn("is_supported",        lit(True)) \
+        .withColumn("has_vulnerabilities", lit(False)) \
         .withColumn("update_urgency",
             when(col("version_count") > 5, "HIGH")
             .when(col("version_count") > 2, "MEDIUM")
@@ -420,12 +414,13 @@ def gold_ingestion_status(spark: SparkSession):
     print("\n🥇 GOLD: data_source_ingestion_status...")
 
     sources = [
-        ("NETCOOL",             "NETWORK_EVENT_MANAGEMENT",   "raw_netcool"),
-        ("DXNETOPS",            "DEVICE_PERFORMANCE",          "raw_dxnetops"),
-        ("ElastiFlow",          "NETWORK_FLOW_ANALYSIS",       "raw_elastiflow"),
-        ("Netscout App",        "APPLICATION_PERFORMANCE",     "raw_netscout_app"),
-        ("Netscout Throughput", "NETWORK_THROUGHPUT",          "raw_netscout_throughput"),
-        ("DataNX",              "NETWORK_INVENTORY",           "raw_datanx"),
+        ("NETCOOL",             "NETWORK_EVENT_MANAGEMENT",  "raw_netcool"),
+        ("DXNETOPS",            "DEVICE_PERFORMANCE",         "raw_dxnetops"),
+        ("ElastiFlow",          "NETWORK_FLOW_ANALYSIS",      "raw_elastiflow"),
+        ("Netscout App",        "APPLICATION_PERFORMANCE",    "raw_netscout_app"),
+        ("Netscout Throughput", "NETWORK_THROUGHPUT",         "raw_netscout_throughput"),
+        ("DataNX",              "NETWORK_INVENTORY",          "raw_datanx"),
+        ("Netflow",             "NETWORK_FLOW_CSV",           "raw_netflow"),
     ]
 
     rows = []
@@ -463,8 +458,165 @@ def gold_ingestion_status(spark: SparkSession):
     print(f"   ✅ {gold.count()} sources → gold.data_source_ingestion_status")
 
 
+# ── 8. NETWORK FLOW SUMMARY (Netflow CSV) ───────────────────────────
+def gold_network_flow_summary(spark: SparkSession):
+    """
+    Source: silver.netflow_flows
+    Target: gold.network_flow_summary → /api/network-flow
+    """
+    print("\n🥇 GOLD: network_flow_summary (Netflow CSV)...")
+    df = spark.read.format("delta").load(Paths.silver("netflow_flows"))
+
+    gold = df.groupBy("source_node", "dest_node") \
+        .agg(
+            count("*")                                              .alias("flow_count"),
+            round(avg("total_latency_ms"), 3)                      .alias("avg_latency_ms"),
+            round(min("total_latency_ms"), 3)                      .alias("min_latency_ms"),
+            round(max("total_latency_ms"), 3)                      .alias("max_latency_ms"),
+            round(percentile_approx("total_latency_ms", 0.95), 3) .alias("p95_latency_ms"),
+            round(avg("hop_count"), 1)                             .alias("avg_hop_count"),
+            max("hop_count")                                       .alias("max_hop_count"),
+        ) \
+        .withColumn("health_status",
+            when(col("avg_latency_ms") > 100, "CRITICAL")
+            .when(col("avg_latency_ms") > 50,  "DEGRADED")
+            .otherwise("HEALTHY")) \
+        .withColumn("snapshot_date", current_date()) \
+        .withColumn("last_updated",  current_timestamp())
+
+    path = Paths.gold("network_flow_summary")
+    gold.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(path)
+    print(f"   ✅ {gold.count():,} pairs → gold/network_flow_summary")
+
+
+# ── 9. NETWORK HUB STATS (Netflow CSV) ──────────────────────────────
+def gold_network_hub_stats(spark: SparkSession):
+    """
+    Source: silver.netflow_flows
+    Target: gold.network_hub_stats → /api/network-flow/hubs
+    Explodes nodes_json so every router/site in every flow contributes.
+    """
+    from pyspark.sql.functions import from_json, explode
+    from pyspark.sql.types import ArrayType, StringType
+
+    print("\n🥇 GOLD: network_hub_stats (Netflow CSV)...")
+    df = spark.read.format("delta").load(Paths.silver("netflow_flows"))
+
+    hubs = df \
+        .withColumn("nodes_arr", from_json(col("nodes_json"), ArrayType(StringType()))) \
+        .withColumn("hub_node",  explode(col("nodes_arr"))) \
+        .filter(col("hub_node").isNotNull() & (col("hub_node") != ""))
+
+    gold = hubs.groupBy("hub_node") \
+        .agg(
+            count("*")                        .alias("flows_through"),
+            round(avg("total_latency_ms"), 3) .alias("avg_path_latency_ms"),
+            round(min("total_latency_ms"), 3) .alias("min_path_latency_ms"),
+            round(max("total_latency_ms"), 3) .alias("max_path_latency_ms"),
+            round(avg("hop_count"), 1)        .alias("avg_hop_count"),
+        ) \
+        .withColumn("hub_type",
+            when(col("hub_node").startswith("UURW"), "CORE_HUB")
+            .when(col("hub_node").startswith("UJP"),  "MESH_NODE")
+            .when(col("hub_node").startswith("UJE"),  "EDGE_NODE")
+            .when(col("hub_node").startswith("DK_"),  "CUSTOMER_SITE")
+            .otherwise("TRANSIT")) \
+        .withColumn("snapshot_date", current_date()) \
+        .withColumn("last_updated",  current_timestamp())
+
+    path = Paths.gold("network_hub_stats")
+    gold.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(path)
+    print(f"   ✅ {gold.count():,} hubs → gold/network_hub_stats")
+
+
+# ── 10. NETWORK LINK LATENCY (Netflow CSV) ──────────────────────────
+def gold_network_link_latency(spark: SparkSession):
+    """
+    Source: silver.netflow_flows
+    Target: gold.network_link_latency → /api/network-flow/links
+    Explodes links_json; only measured (non-null) latency links included.
+    """
+    from pyspark.sql.functions import from_json, explode
+    from pyspark.sql.types import ArrayType, StructType, StructField, StringType, DoubleType
+
+    print("\n🥇 GOLD: network_link_latency (Netflow CSV)...")
+
+    _LINK_SCHEMA = ArrayType(StructType([
+        StructField("ccsd",      StringType(), True),
+        StructField("from_node", StringType(), True),
+        StructField("to_node",   StringType(), True),
+        StructField("link_ms",   DoubleType(), True),
+    ]))
+
+    df = spark.read.format("delta").load(Paths.silver("netflow_flows"))
+
+    links = df \
+        .withColumn("links_arr", from_json(col("links_json"), _LINK_SCHEMA)) \
+        .withColumn("link",      explode(col("links_arr"))) \
+        .select(
+            col("link.ccsd")      .alias("circuit_id"),
+            col("link.from_node") .alias("from_node"),
+            col("link.to_node")   .alias("to_node"),
+            col("link.link_ms")   .alias("link_ms"),
+        ) \
+        .filter(col("link_ms").isNotNull())  # exclude N/A first/last-mile links
+
+    gold = links.groupBy("circuit_id", "from_node", "to_node") \
+        .agg(
+            count("*")                                         .alias("measurement_count"),
+            round(avg("link_ms"), 3)                          .alias("avg_latency_ms"),
+            round(min("link_ms"), 3)                          .alias("min_latency_ms"),
+            round(max("link_ms"), 3)                          .alias("max_latency_ms"),
+            round(percentile_approx("link_ms", 0.95), 3)     .alias("p95_latency_ms"),
+        ) \
+        .withColumn("link_health",
+            when(col("avg_latency_ms") > 50,  "CRITICAL")
+            .when(col("avg_latency_ms") > 10,  "DEGRADED")
+            .otherwise("HEALTHY")) \
+        .withColumn("snapshot_date", current_date()) \
+        .withColumn("last_updated",  current_timestamp())
+
+    path = Paths.gold("network_link_latency")
+    gold.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(path)
+    print(f"   ✅ {gold.count():,} circuits → gold/network_link_latency")
+
+
+# ── 11. NETWORK PATH DISTRIBUTION (Netflow CSV) ─────────────────────
+def gold_network_path_distribution(spark: SparkSession):
+    """
+    Source: silver.netflow_flows
+    Target: gold.network_path_distribution → /api/network-flow/paths
+    Distribution of flows by hop count.
+    """
+    print("\n🥇 GOLD: network_path_distribution (Netflow CSV)...")
+    df = spark.read.format("delta").load(Paths.silver("netflow_flows"))
+    total = df.count()
+
+    gold = df.groupBy("hop_count") \
+        .agg(
+            count("*")                        .alias("flow_count"),
+            round(avg("total_latency_ms"), 3) .alias("avg_latency_ms"),
+            round(min("total_latency_ms"), 3) .alias("min_latency_ms"),
+            round(max("total_latency_ms"), 3) .alias("max_latency_ms"),
+        ) \
+        .withColumn("pct_of_total",
+            round(col("flow_count") * 100.0 / lit(total), 2)) \
+        .withColumn("complexity_label",
+            when(col("hop_count") <= 3,  "LOW")
+            .when(col("hop_count") <= 6,  "MEDIUM")
+            .when(col("hop_count") <= 10, "HIGH")
+            .otherwise("VERY_HIGH")) \
+        .orderBy("hop_count") \
+        .withColumn("snapshot_date", current_date()) \
+        .withColumn("last_updated",  current_timestamp())
+
+    path = Paths.gold("network_path_distribution")
+    gold.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(path)
+    print(f"   ✅ {gold.count():,} hop buckets → gold/network_path_distribution")
+
+
 if __name__ == "__main__":
-    spark = get_spark("Gold-OE-Aggregation-v2")
+    spark = get_spark("Gold-OE-Aggregation-v3")
     try:
         gold_app_health_summary(spark)
         gold_network_performance(spark)
@@ -473,6 +625,10 @@ if __name__ == "__main__":
         gold_top_issues(spark)
         gold_version_sprawl(spark)
         gold_ingestion_status(spark)
+        gold_network_flow_summary(spark)
+        gold_network_hub_stats(spark)
+        gold_network_link_latency(spark)
+        gold_network_path_distribution(spark)
         print("\n✅ GOLD AGGREGATION COMPLETE")
         print("""
   Gold tables ready for Spring Boot API:
@@ -484,6 +640,10 @@ if __name__ == "__main__":
     gold/top_issues_summary           → /api/top-issues
     gold/version_sprawl_summary       → /api/version-sprawl
     gold/data_source_ingestion_status → /api/data-sources
+    gold/network_flow_summary         → /api/network-flow
+    gold/network_hub_stats            → /api/network-flow/hubs
+    gold/network_link_latency         → /api/network-flow/links
+    gold/network_path_distribution    → /api/network-flow/paths
         """)
     finally:
         spark.stop()

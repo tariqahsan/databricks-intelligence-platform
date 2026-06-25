@@ -1,14 +1,15 @@
 """
-silver/transform_all.py  (v2 — Real Schema Edition)
-SILVER LAYER — Cleanse and conform all 6 real-schema bronze sources.
+silver/transform_all.py  (v3 — Netflow Edition)
+SILVER LAYER — Cleanse and conform all 7 bronze sources.
 
 Bronze → Silver mapping:
-  raw_netcool           → silver/netcool_events
-  raw_dxnetops          → silver/device_metrics
-  raw_elastiflow        → silver/network_flows
-  raw_netscout_app      → silver/app_performance
+  raw_netcool             → silver/netcool_events
+  raw_dxnetops            → silver/device_metrics
+  raw_elastiflow          → silver/network_flows
+  raw_netscout_app        → silver/app_performance
   raw_netscout_throughput → silver/network_throughput
-  raw_datanx            → silver/device_inventory
+  raw_datanx              → silver/device_inventory
+  raw_netflow             → silver/netflow_flows
 """
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
@@ -102,12 +103,12 @@ def silver_dxnetops(spark: SparkSession):
             col("host.geo_location.lat")) \
         .withColumn("geo_lon",
             col("host.geo_location.lon")) \
-        .withColumn("metric_family",       col("metricFamily")) \
-        .withColumn("metric_family_display",col("metricFamilyDisplayName")) \
-        .withColumn("component_name",      col("componentName")) \
-        .withColumn("equip_type",          col("equipt_type")) \
-        .withColumn("dcm_id",              col("dcmID")) \
-        .withColumn("poll_rate_ms",        col("pollRateMS").cast(LongType())) \
+        .withColumn("metric_family",        col("metricFamily")) \
+        .withColumn("metric_family_display", col("metricFamilyDisplayName")) \
+        .withColumn("component_name",       col("componentName")) \
+        .withColumn("equip_type",           col("equipt_type")) \
+        .withColumn("dcm_id",               col("dcmID")) \
+        .withColumn("poll_rate_ms",         col("pollRateMS").cast(LongType())) \
         .withColumn("utilization",
             coalesce(
                 col("metrics.Utilization"),
@@ -250,16 +251,16 @@ def silver_netscout_throughput(spark: SparkSession):
         .filter(col("device_alias").isNotNull()) \
         .withColumn("event_timestamp",
             to_timestamp(col("timestamp"), "yyyy-MM-dd HH:mm:ss.SSSSSS z")) \
-        .withColumn("device_alias",          col("device_alias")) \
-        .withColumn("interface_alias",       col("device_interface_alias")) \
-        .withColumn("application",           col("application")) \
-        .withColumn("application_group",     col("application_group")) \
-        .withColumn("vlan_id",               col("vlan_id").cast(IntegerType())) \
-        .withColumn("octets_in",             col("octets_in").cast(LongType())) \
-        .withColumn("octets_out",            col("octets_out").cast(LongType())) \
-        .withColumn("packets_in",            col("packets_in").cast(LongType())) \
-        .withColumn("packets_out",           col("packets_out").cast(LongType())) \
-        .withColumn("peak_bytes_out",        col("peak_bytes_out").cast(LongType())) \
+        .withColumn("device_alias",      col("device_alias")) \
+        .withColumn("interface_alias",   col("device_interface_alias")) \
+        .withColumn("application",       col("application")) \
+        .withColumn("application_group", col("application_group")) \
+        .withColumn("vlan_id",           col("vlan_id").cast(IntegerType())) \
+        .withColumn("octets_in",         col("octets_in").cast(LongType())) \
+        .withColumn("octets_out",        col("octets_out").cast(LongType())) \
+        .withColumn("packets_in",        col("packets_in").cast(LongType())) \
+        .withColumn("packets_out",       col("packets_out").cast(LongType())) \
+        .withColumn("peak_bytes_out",    col("peak_bytes_out").cast(LongType())) \
         .withColumn("total_bytes",
             col("octets_in") + col("octets_out")) \
         .withColumn("total_packets",
@@ -335,6 +336,93 @@ def silver_datanx(spark: SparkSession):
     print(f"   ✅ {silver.count():,} rows → silver.device_inventory")
 
 
+# ── NETFLOW CSV → silver.netflow_flows ──────────────────────────────
+def silver_netflow(spark: SparkSession):
+    """
+    Source: bronze/raw_netflow (DAI + DISA Meade CSVs)
+    Target: silver/netflow_flows
+
+    Parses Flow_Path strings into structured hop/link data using a UDF
+    that ports parse_hops_with_ccsd() from generate_hop_tree.py.
+
+    Adds columns:
+      hop_count   INT    — number of network hops (nodes - 1)
+      nodes_json  STRING — JSON array of node name strings
+      links_json  STRING — JSON array of {ccsd, from_node, to_node, link_ms}
+    """
+    import re
+    import json
+    from pyspark.sql.functions import udf
+    from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+
+    print("\n🔧 SILVER: netflow_flows (Flow_Path parsing)...")
+
+    def _parse_flow_path(path_str):
+        if not path_str:
+            return (0, "[]", "[]")
+        try:
+            # Replace UJP_MESH block with a clean placeholder arrow
+            cleaned = re.sub(
+                r'\s*->\s*\[UJP_MESH\s*--[\d.]+ms-->\s*\]\s*->\s*',
+                '  --([MESH], N/A)-->  ',
+                path_str
+            )
+            parts     = re.split(r'\s+--\([^)]+\)-->\s+', cleaned)
+            links_raw = re.findall(r'--\(([^)]+)\)-->', cleaned)
+            nodes = [parts[0].strip()]
+            links = []
+            for i, raw in enumerate(links_raw):
+                # Last comma-delimited token is always the latency string
+                tokens  = [t.strip() for t in raw.split(",")]
+                lat_str = tokens[-1]
+                ccsd    = ",".join(tokens[:-1]) if len(tokens) > 1 else None
+                ms      = None
+                m       = re.match(r"([\d.]+)ms", lat_str)
+                if m:
+                    ms = float(m.group(1))
+                to_node = parts[i + 1].strip() if i + 1 < len(parts) else "?"
+                nodes.append(to_node)
+                links.append({
+                    "ccsd":      ccsd,
+                    "from_node": nodes[i],
+                    "to_node":   to_node,
+                    "link_ms":   ms,
+                })
+            return (len(links), json.dumps(nodes), json.dumps(links))
+        except Exception:
+            return (0, "[]", "[]")
+
+    _schema = StructType([
+        StructField("hop_count",  IntegerType(), True),
+        StructField("nodes_json", StringType(),  True),
+        StructField("links_json", StringType(),  True),
+    ])
+    parse_udf = udf(_parse_flow_path, _schema)
+
+    bronze = spark.read.format("delta").load(Paths.bronze("raw_netflow"))
+
+    parsed = bronze \
+        .withColumn("_p",          parse_udf(col("Flow_Path"))) \
+        .withColumn("hop_count",   col("_p.hop_count")) \
+        .withColumn("nodes_json",  col("_p.nodes_json")) \
+        .withColumn("links_json",  col("_p.links_json")) \
+        .drop("_p") \
+        .withColumnRenamed("Flow_ID",          "flow_id") \
+        .withColumnRenamed("Source_IP",        "source_ip") \
+        .withColumnRenamed("Dest_IP",          "dest_ip") \
+        .withColumnRenamed("Source",           "source_node") \
+        .withColumnRenamed("Destination",      "dest_node") \
+        .withColumnRenamed("Flow_Path",        "flow_path") \
+        .withColumnRenamed("Total_Latency_ms", "total_latency_ms") \
+        .withColumn("_processed_at", current_timestamp())
+
+    path = Paths.silver("netflow_flows")
+    parsed.write.format("delta").mode("overwrite") \
+          .option("overwriteSchema", "true").save(path)
+    print(f"   ✅ {parsed.count():,} flows → silver/netflow_flows")
+
+
+# ── Shared upsert helper ─────────────────────────────────────────────
 def _upsert_or_create(spark, df, path, key):
     df = df.dropDuplicates([key])  # prevent MERGE ambiguity
     if DeltaTable.isDeltaTable(spark, path):
@@ -349,7 +437,7 @@ def _upsert_or_create(spark, df, path, key):
 
 
 if __name__ == "__main__":
-    spark = get_spark("Silver-OE-Transform-v2")
+    spark = get_spark("Silver-OE-Transform-v3")
     try:
         silver_netcool(spark)
         silver_dxnetops(spark)
@@ -357,6 +445,7 @@ if __name__ == "__main__":
         silver_netscout_app(spark)
         silver_netscout_throughput(spark)
         silver_datanx(spark)
+        silver_netflow(spark)
         print("\n✅ SILVER TRANSFORM COMPLETE")
     finally:
         spark.stop()

@@ -1,6 +1,6 @@
 """
-bronze/ingest_all_sources.py  (v2 — Real Schema Edition)
-BRONZE LAYER — Ingest all 6 real-schema sources into Delta tables.
+bronze/ingest_all_sources.py  (v3 — Netflow Edition)
+BRONZE LAYER — Ingest all 7 sources into Delta tables.
 
 Sources → Bronze tables:
   netcool_events_*.jsonl       → bronze/raw_netcool
@@ -9,6 +9,7 @@ Sources → Bronze tables:
   netscout_app_*.jsonl         → bronze/raw_netscout_app
   netscout_throughput_*.jsonl  → bronze/raw_netscout_throughput
   datanx_inventory_*.jsonl     → bronze/raw_datanx
+  All_Complete_Flows_*.csv     → bronze/raw_netflow
 """
 import pathlib
 from pyspark.sql import SparkSession
@@ -87,9 +88,33 @@ def ingest_datanx(spark: SparkSession):
     print(f"    {df.count():,} rows → {path}")
 
 
+def ingest_netflow(spark: SparkSession):
+    print("\n BRONZE: Netflow CSV (DAI + DISA Meade)...")
+    netflow_dir = str(
+        pathlib.Path(__file__).resolve().parent.parent.parent / "mock-logs" / "network_flows"
+    )
+    csv_files = [
+        f"{netflow_dir}/All_Complete_Flows_DAI.csv",
+        f"{netflow_dir}/All_Complete_Flows_DISA_Meade.csv",
+    ]
+    df = (
+        spark.read
+             .option("header", "true")
+             .option("inferSchema", "true")
+             .csv(csv_files)
+             .withColumn("_ingested_at", current_timestamp())
+             .withColumn("_source_file", input_file_name())
+             .withColumn("_batch_date",  lit(TODAY))
+    )
+    path = Paths.bronze("raw_netflow")
+    df.write.format("delta").mode("overwrite") \
+      .option("overwriteSchema", "true").save(path)
+    print(f"    {df.count():,} rows → {path}")
+
+
 if __name__ == "__main__":
     from spark_session import get_spark
-    spark = get_spark("Bronze-OE-Ingestion-v2")
+    spark = get_spark("Bronze-OE-Ingestion-v3")
     try:
         ingest_netcool(spark)
         ingest_dxnetops(spark)
@@ -97,6 +122,7 @@ if __name__ == "__main__":
         ingest_netscout_app(spark)
         ingest_netscout_throughput(spark)
         ingest_datanx(spark)
+        ingest_netflow(spark)
         print("\n BRONZE INGESTION COMPLETE")
     finally:
         spark.stop()

@@ -1,17 +1,18 @@
 """
-run_pipeline.py  (v2 — Real Schema Edition)
-Master pipeline runner — executes full Bronze → Silver → Gold for all 6 sources.
+run_pipeline.py  (v3 — Netflow Edition)
+Master pipeline runner — Bronze → Silver → Gold for all sources.
 
-Usage (from inside Jupyter or terminal in the Docker container):
-    python run_pipeline.py
+Sources:
+    NETCOOL · DXNETOPS · ElastiFlow · Netscout App · Netscout Throughput · DataNX
+    NETFLOW  (All_Complete_Flows_DAI.csv + All_Complete_Flows_DISA_Meade.csv)
 
-Or step by step:
+Usage (from project root inside Jupyter terminal):
     python scripts/generate_mock_logs.py --days 3
     python run_pipeline.py
 
-Sources:
-    NETCOOL     · DXNETOPS    · ElastiFlow
-    Netscout App · Netscout Throughput · DataNX
+Prerequisites (handled automatically by docker-compose + start-jupyter.sh):
+    - PYTHONPATH includes /home/jovyan/project and /home/jovyan/project/src
+    - delta-spark, boto3, s3fs installed by start-jupyter.sh on container start
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(__file__))
@@ -21,16 +22,20 @@ from spark_session import get_spark
 
 from pipelines.bronze.ingest_all_sources import (
     ingest_netcool, ingest_dxnetops, ingest_elastiflow,
-    ingest_netscout_app, ingest_netscout_throughput, ingest_datanx
+    ingest_netscout_app, ingest_netscout_throughput, ingest_datanx,
+    ingest_netflow,
 )
 from pipelines.silver.transform_all import (
     silver_netcool, silver_dxnetops, silver_elastiflow,
-    silver_netscout_app, silver_netscout_throughput, silver_datanx
+    silver_netscout_app, silver_netscout_throughput, silver_datanx,
+    silver_netflow,
 )
 from pipelines.gold.aggregate_all import (
     gold_app_health_summary, gold_network_performance,
     gold_device_health, gold_dns_metrics,
-    gold_top_issues, gold_version_sprawl, gold_ingestion_status
+    gold_top_issues, gold_version_sprawl, gold_ingestion_status,
+    gold_network_flow_summary, gold_network_hub_stats,
+    gold_network_link_latency, gold_network_path_distribution,
 )
 
 
@@ -39,6 +44,7 @@ def run():
     print("  OE DATA INTELLIGENCE PLATFORM — FULL MEDALLION PIPELINE")
     print("  Sources: NETCOOL · DXNETOPS · ElastiFlow ·")
     print("           Netscout App · Netscout Throughput · DataNX")
+    print("           NETFLOW (DAI + DISA Meade CSVs)")
     print("=" * 65)
 
     spark = get_spark("OE-Full-Pipeline")
@@ -56,6 +62,7 @@ def run():
         ingest_netscout_app(spark)
         ingest_netscout_throughput(spark)
         ingest_datanx(spark)
+        ingest_netflow(spark)
         print(f"\n  ⏱  Bronze complete in {time.time()-t:.1f}s")
 
         # ── SILVER ───────────────────────────────────────────────────
@@ -69,6 +76,7 @@ def run():
         silver_netscout_app(spark)
         silver_netscout_throughput(spark)
         silver_datanx(spark)
+        silver_netflow(spark)
         print(f"\n  ⏱  Silver complete in {time.time()-t:.1f}s")
 
         # ── GOLD ─────────────────────────────────────────────────────
@@ -83,9 +91,12 @@ def run():
         gold_top_issues(spark)
         gold_version_sprawl(spark)
         gold_ingestion_status(spark)
+        gold_network_flow_summary(spark)
+        gold_network_hub_stats(spark)
+        gold_network_link_latency(spark)
+        gold_network_path_distribution(spark)
         print(f"\n  ⏱  Gold complete in {time.time()-t:.1f}s")
 
-        # ── SUMMARY ──────────────────────────────────────────────────
         elapsed = time.time() - total_start
         print("\n" + "=" * 65)
         print(f"  ✅  PIPELINE COMPLETE in {elapsed:.1f}s")
@@ -100,6 +111,10 @@ def run():
     gold/top_issues_summary           → /api/top-issues
     gold/version_sprawl_summary       → /api/version-sprawl
     gold/data_source_ingestion_status → /api/data-sources
+    gold/network_flow_summary         → /api/network-flow
+    gold/network_hub_stats            → /api/network-flow/hubs
+    gold/network_link_latency         → /api/network-flow/links
+    gold/network_path_distribution    → /api/network-flow/paths
         """)
 
     except Exception as e:
