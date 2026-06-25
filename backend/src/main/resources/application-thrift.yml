@@ -85,8 +85,8 @@ oe:
   # local download path). Script names and all other keys are unchanged.
   network-flows:
     python-cmd:  python3
-    scripts-dir: /home/jovyan/project
-    data-dir:    /home/jovyan/project/mock-logs/network_flows
+    scripts-dir: C:/Dev/MMA-Training/Artificial-Intelligence/databricks-intelligence-platform/oe-ingestion-pipeline
+    data-dir:    C:/Dev/MMA-Training/Artificial-Intelligence/databricks-intelligence-platform/oe-ingestion-pipeline/mock-logs/network_flows
     dai-csv:     All_Complete_Flows_DAI.csv
     meade-csv:   All_Complete_Flows_DISA_Meade.csv
 
