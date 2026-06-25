@@ -111,7 +111,7 @@ public class NetworkFlowService {
                 "--direction", direction
             );
             pb.redirectErrorStream(true);
-
+            pb.directory(new java.io.File(scriptsDir)); 
             Process      proc   = pb.start();
             String       output = new BufferedReader(
                 new InputStreamReader(proc.getInputStream()))
@@ -150,7 +150,7 @@ public class NetworkFlowService {
                 "--out",       tmpOut.toString()
             );
             pb.redirectErrorStream(true);
-
+            pb.directory(new java.io.File(scriptsDir)); 
             Process      proc   = pb.start();
             String       output = new BufferedReader(
                 new InputStreamReader(proc.getInputStream()))
