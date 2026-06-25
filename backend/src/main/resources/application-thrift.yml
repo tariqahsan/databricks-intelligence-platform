@@ -58,6 +58,38 @@ oe:
     gold-prefix: "gold"
     silver-prefix: "silver"
 
+  # ── Netflow Visualization Configuration ──────────────────────────
+  # Controls where NetworkFlowService looks for Python scripts and
+  # CSV data files when generating the D3.js hop tree and Leaflet
+  # ant-trail map via ProcessBuilder.
+  #
+  # python-cmd   : Python executable on the Jupyter container PATH.
+  #                Use "python3" for Linux/Docker (default).
+  #                Use "python"  if running Spring Boot locally on
+  #                Windows pointing at a local Python install.
+  #
+  # scripts-dir  : Directory containing generate_hop_tree.py and
+  #                generate_trail_map.py. In the Docker stack this
+  #                is the Jupyter project root. When running Spring
+  #                Boot locally on Windows, set this to the absolute
+  #                Windows path where you checked out the scripts,
+  #                e.g. C:/Dev/MMA-Training/.../oe-ingestion-pipeline
+  #
+  # data-dir     : Directory containing the Netflow CSV files.
+  #                Must contain both dai-csv and meade-csv files.
+  #
+  # dai-csv      : Filename of the DAI flow CSV (do not include path).
+  # meade-csv    : Filename of the DISA Meade flow CSV.
+  #
+  # AWS GovCloud transition: only data-dir changes (S3 mount point or
+  # local download path). Script names and all other keys are unchanged.
+  network-flows:
+    python-cmd:  python3
+    scripts-dir: /home/jovyan/project
+    data-dir:    /home/jovyan/project/mock-logs/network_flows
+    dai-csv:     All_Complete_Flows_DAI.csv
+    meade-csv:   All_Complete_Flows_DISA_Meade.csv
+
 logging:
   level:
     mil.disa.oe: DEBUG

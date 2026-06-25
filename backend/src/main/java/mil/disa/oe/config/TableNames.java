@@ -18,7 +18,7 @@ public class TableNames {
     private final String silverPrefix;
 
     public TableNames(
-            @Value("${oe.datasource.gold-prefix:gold}")    String goldPrefix,
+            @Value("${oe.datasource.gold-prefix:gold}")     String goldPrefix,
             @Value("${oe.datasource.silver-prefix:silver}") String silverPrefix) {
         this.goldPrefix   = goldPrefix;
         this.silverPrefix = silverPrefix;
@@ -35,6 +35,15 @@ public class TableNames {
     public String issueTrends()               { return goldPrefix + ".issue_trends"; }
     public String versionSprawlSummary()      { return goldPrefix + ".version_sprawl_summary"; }
     public String dataSourceIngestionStatus() { return goldPrefix + ".data_source_ingestion_status"; }
+
+    // ── GOLD — Netflow CSV (DAI + DISA Meade) ────────────────────────
+    // Populated by the Netflow Bronze→Silver→Gold pipeline.
+    // Source CSVs: All_Complete_Flows_DAI.csv
+    //              All_Complete_Flows_DISA_Meade.csv
+    public String networkFlowSummary()        { return goldPrefix + ".network_flow_summary"; }
+    public String networkHubStats()           { return goldPrefix + ".network_hub_stats"; }
+    public String networkLinkLatency()        { return goldPrefix + ".network_link_latency"; }
+    public String networkPathDistribution()   { return goldPrefix + ".network_path_distribution"; }
 
     // ── SILVER ───────────────────────────────────────────────────────
     public String appPerformance()            { return silverPrefix + ".app_performance"; }
