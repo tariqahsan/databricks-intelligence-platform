@@ -17,9 +17,8 @@ import java.util.List;
 /**
  * NetworkFlowRepository
  * =====================
- * Queries the four Netflow Gold Delta tables registered in the Hive metastore.
- *
- * Sources: All_Complete_Flows_DAI.csv + All_Complete_Flows_DISA_Meade.csv
+ * Queries the four Netflow Gold Delta tables registered in the Hive metastore,
+ * plus network_flow_summary for customer-site to hub flow pairs.
  *
  * Gold table schemas (written by aggregate_all.py):
  *
@@ -41,11 +40,6 @@ import java.util.List;
  *   gold.network_path_distribution
  *     hop_count, flow_count, avg_latency_ms, min_latency_ms, max_latency_ms,
  *     pct_of_total, complexity_label, snapshot_date, last_updated
- *
- * Dataset filtering (hub_stats + link_latency):
- *   MEADE — UURWMEA* core hubs and upstream UJP/UJE router nodes
- *   DAI   — DK_PENTAGON and associated PNT edge routers
- *   null  — no filter; returns full merged dataset
  */
 @Repository
 public class NetworkFlowRepository {
@@ -59,8 +53,6 @@ public class NetworkFlowRepository {
     }
 
     // ── Hive/Databricks JDBC compat helpers ──────────────────────────────────
-    // Copied from NetworkPerformanceRepository — Hive returns numeric columns
-    // as Object, not double, so we normalise through BigDecimal.
 
     private static BigDecimal bd(ResultSet rs, String col) throws SQLException {
         double v = rs.getDouble(col);
@@ -77,12 +69,11 @@ public class NetworkFlowRepository {
         return val == null ? 0L : ((Number) val).longValue();
     }
 
-    // ── 1. KPIs — gold.network_flow_summary ──────────────────────────────────
+    // ── 1. KPIs -- gold.network_flow_summary ─────────────────────────────────
 
     @Retryable(retryFor = Exception.class, maxAttempts = 3,
                backoff = @Backoff(delay = 2000, multiplier = 2.0))
     public NetworkFlowKpis getKpis() {
-        // Aggregate across all source→dest pairs — no single summary row exists
         String sql = """
                 SELECT
                     COUNT(*)                                          AS total_pairs,
@@ -115,7 +106,7 @@ public class NetworkFlowRepository {
         );
     }
 
-    // ── 2. Hub Stats — gold.network_hub_stats ────────────────────────────────
+    // ── 2. Hub Stats -- gold.network_hub_stats ───────────────────────────────
 
     @Retryable(retryFor = Exception.class, maxAttempts = 3,
                backoff = @Backoff(delay = 2000, multiplier = 2.0))
@@ -148,12 +139,11 @@ public class NetworkFlowRepository {
                 ));
     }
 
-    // ── 3. Available Hubs — for Angular dropdown ──────────────────────────────
+    // ── 3. Available Hubs -- for Angular dropdown ─────────────────────────────
 
     @Retryable(retryFor = Exception.class, maxAttempts = 3,
                backoff = @Backoff(delay = 2000, multiplier = 2.0))
     public List<String> getAvailableHubs(String dataset) {
-        // Return only CORE_HUB nodes — these are the valid roots for the hop tree
         String datasetClause = buildHubDatasetClause(dataset);
         String sql = """
                 SELECT DISTINCT hub_node
@@ -165,7 +155,7 @@ public class NetworkFlowRepository {
         return jdbc.queryForList(sql, Collections.emptyMap(), String.class);
     }
 
-    // ── 4. Link Latency — gold.network_link_latency ──────────────────────────
+    // ── 4. Link Latency -- gold.network_link_latency ─────────────────────────
 
     @Retryable(retryFor = Exception.class, maxAttempts = 3,
                backoff = @Backoff(delay = 2000, multiplier = 2.0))
@@ -202,13 +192,11 @@ public class NetworkFlowRepository {
                 ));
     }
 
-    // ── 5. Path Distribution — gold.network_path_distribution ────────────────
+    // ── 5. Path Distribution -- gold.network_path_distribution ───────────────
 
     @Retryable(retryFor = Exception.class, maxAttempts = 3,
                backoff = @Backoff(delay = 2000, multiplier = 2.0))
     public List<NetworkPathStat> getPathDistribution(String dataset) {
-        // Path distribution is a global hop-count histogram — no dataset column.
-        // The dataset param is accepted for API consistency but not applied here.
         String sql = """
                 SELECT
                     hop_count,
@@ -234,17 +222,53 @@ public class NetworkFlowRepository {
                 ));
     }
 
+    // ── 6. Flow Summary -- source->dest pairs from gold.network_flow_summary ──
+    // Returns actual customer site (DK_*) to hub (UURWMEA*) flow pairs.
+    // Used by Angular trail map (draw ant-path routes) and hop tree
+    // (add DK_* customer sites as leaf nodes).
+
+    @Retryable(retryFor = Exception.class, maxAttempts = 3,
+               backoff = @Backoff(delay = 2000, multiplier = 2.0))
+    public List<NetworkFlowSummaryRow> getFlowSummary(String dataset) {
+        // Customer sites use various D-prefixes: DK_, DD_, DA_, DC_, DF_, DE_, DR_, DX_, DO_
+        // All start with 'D' followed by a letter and underscore. Exclude hub-to-hub
+        // flows (UURWMEA->UURWMEA) and unknown nodes like OKCIAPREM1.
+        String datasetClause = switch (dataset == null ? "ALL" : dataset.toUpperCase()) {
+            // MEADE: all customer D* sites flowing TO Fort Meade core hub
+            case "MEADE" -> " AND source_node LIKE 'D%' AND dest_node LIKE 'UURWMEA%' ";
+            // DAI: flows where source is any customer D* site to non-MEADE hub
+            case "DAI"   -> " AND source_node LIKE 'D%' AND dest_node NOT LIKE 'UURWMEA%' ";
+            // ALL: any pair where source is a customer D* site to any UURWMEA hub
+            default      -> " AND source_node LIKE 'D%' AND dest_node LIKE 'UURWMEA%' ";
+        };
+
+        String sql = """
+                SELECT
+                    source_node,
+                    dest_node,
+                    flow_count,
+                    ROUND(avg_latency_ms, 3) AS avg_latency_ms,
+                    health_status
+                FROM %s
+                WHERE 1=1 %s
+                ORDER BY flow_count DESC
+                LIMIT 1000
+                """.formatted(tables.networkFlowSummary(), datasetClause);
+
+        return jdbc.query(sql, Collections.emptyMap(),
+                (rs, i) -> new NetworkFlowSummaryRow(
+                        rs.getString("source_node"),
+                        rs.getString("dest_node"),
+                        rs.getLong("flow_count"),
+                        bd(rs, "avg_latency_ms"),
+                        rs.getString("health_status")
+                ));
+    }
+
     // ── Dataset filter helpers ────────────────────────────────────────────────
-    // The Gold tables contain all flows from both CSVs merged together.
-    // We filter by node naming conventions established in the real data:
-    //   MEADE nodes: UURWMEA* (core), UJPW* (mesh), UJEW*/UJEE* (edge)
-    //   DAI nodes:   DK_PENTAGON* (source site), UJEWPNT*/UJPWPNT* (PNT routers)
-    // These are inline SQL fragments — safe because they are hardcoded constants,
-    // never interpolated from user input.
 
     private static String buildHubDatasetClause(String dataset) {
-        if (dataset == null || dataset.isBlank()) return "";
-        return switch (dataset.toUpperCase()) {
+        return switch (dataset == null ? "ALL" : dataset.toUpperCase()) {
             case "MEADE" -> " AND (hub_node LIKE 'UURWMEA%' OR hub_node LIKE 'UJPW%' OR hub_node LIKE 'UJEW%' OR hub_node LIKE 'UJEE%') ";
             case "DAI"   -> " AND (hub_node LIKE 'DK_%' OR hub_node LIKE 'UJEWPNT%' OR hub_node LIKE 'UJPWPNT%') ";
             default      -> "";
@@ -252,8 +276,7 @@ public class NetworkFlowRepository {
     }
 
     private static String buildLinkDatasetClause(String dataset) {
-        if (dataset == null || dataset.isBlank()) return "";
-        return switch (dataset.toUpperCase()) {
+        return switch (dataset == null ? "ALL" : dataset.toUpperCase()) {
             case "MEADE" -> " AND (from_node LIKE 'UURWMEA%' OR from_node LIKE 'UJPW%' OR from_node LIKE 'UJEW%' OR to_node LIKE 'UURWMEA%') ";
             case "DAI"   -> " AND (from_node LIKE 'DK_%' OR from_node LIKE 'UJEWPNT%' OR to_node LIKE 'DK_%') ";
             default      -> "";

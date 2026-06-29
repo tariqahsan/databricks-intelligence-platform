@@ -154,3 +154,20 @@ user: minioadmin / minioadmin
 Buckets: bronze / silver / gold
 ```
 Browse Delta table files here to verify ingestion worked.
+
+## Run extract_coordinates.py from the oe-ingestion-pipeline folder where master_dataframe_long.xlsx
+Microsoft Windows [Version 10.0.26200.8655]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Dev\databricks-intelligence-platform\oe-ingestion-pipeline>python extract_coordinates.py
+Reading: master_dataframe_long.xlsx
+Columns found: ['Router', 'Latitude', 'Longitude']
+Using columns: router=Router, lat=Latitude, lng=Longitude
+Extracted 7685 router coordinates (2 skipped — invalid values)
+
+Written: router-coordinates.json  (536.9 KB)
+
+Next step: copy to Angular assets folder:
+  frontend/src/assets/data/router-coordinates.json
+
+C:\Dev\databricks-intelligence-platform\oe-ingestion-pipeline>

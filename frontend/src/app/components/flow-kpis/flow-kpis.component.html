@@ -1,0 +1,66 @@
+<!-- flow-kpis.component.html -->
+<div class="loading-bar" *ngIf="loading">Loading KPIs...</div>
+
+<div class="kpis-bar" *ngIf="kpis">
+
+  <div class="kpi-card">
+    <div class="kpi-val">{{ kpis.totalFlows | number }}</div>
+    <div class="kpi-lbl">Total Flows</div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-val">{{ kpis.totalPairs | number }}</div>
+    <div class="kpi-lbl">Src-Dst Pairs</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="kpi-card" [class]="latencyClass(kpis.avgLatencyMs)">
+    <div class="kpi-val" [class]="latencyClass(kpis.avgLatencyMs)">
+      {{ kpis.avgLatencyMs | number:'1.1-1' }}<span style="font-size:11px">ms</span>
+    </div>
+    <div class="kpi-lbl">Avg Latency</div>
+  </div>
+
+  <div class="kpi-card" [class]="latencyClass(kpis.p95LatencyMs)">
+    <div class="kpi-val" [class]="latencyClass(kpis.p95LatencyMs)">
+      {{ kpis.p95LatencyMs | number:'1.1-1' }}<span style="font-size:11px">ms</span>
+    </div>
+    <div class="kpi-lbl">P95 Latency</div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-val">{{ kpis.maxLatencyMs | number:'1.1-1' }}<span style="font-size:11px">ms</span></div>
+    <div class="kpi-lbl">Max Latency</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="kpi-card">
+    <div class="kpi-val">{{ kpis.avgHopCount | number:'1.1-1' }}</div>
+    <div class="kpi-lbl">Avg Hops</div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-val">{{ kpis.maxHopCount }}</div>
+    <div class="kpi-lbl">Max Hops</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="kpi-card healthy">
+    <div class="kpi-val healthy">{{ kpis.healthyPairs | number }}</div>
+    <div class="kpi-lbl">Healthy</div>
+  </div>
+
+  <div class="kpi-card degraded">
+    <div class="kpi-val degraded">{{ kpis.degradedPairs | number }}</div>
+    <div class="kpi-lbl">Degraded</div>
+  </div>
+
+  <div class="kpi-card critical">
+    <div class="kpi-val critical">{{ kpis.criticalPairs | number }}</div>
+    <div class="kpi-lbl">Critical</div>
+  </div>
+
+</div>

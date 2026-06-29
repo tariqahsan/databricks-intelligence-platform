@@ -1,0 +1,75 @@
+<!-- network-flows.component.html -->
+
+<!-- ── Normal view ─────────────────────────────────────────────────────── -->
+<ng-container *ngIf="!isFullscreen">
+
+  <div class="page-header">
+    <div>
+      <div class="page-title">NETWORK FLOWS</div>
+      <div class="page-sub">DAI + DISA Meade CSV Pipeline &middot; Medallion Gold Layer</div>
+    </div>
+    <span class="ds-label">DATASET</span>
+    <div class="ds-btn-group">
+      <button [class.active]="dataset==='MEADE'" (click)="setDataset('MEADE')">MEADE</button>
+      <button [class.active]="dataset==='DAI'"   (click)="setDataset('DAI')">DAI</button>
+      <button [class.active]="dataset==='ALL'"   (click)="setDataset('ALL')">ALL</button>
+    </div>
+  </div>
+
+  <app-flow-kpis></app-flow-kpis>
+
+  <div class="tab-bar">
+    <div class="tab" [class.active]="activeTab==='hop-tree'"  (click)="setTab('hop-tree')">
+      Logical Hop Tree
+    </div>
+    <div class="tab" [class.active]="activeTab==='trail-map'" (click)="setTab('trail-map')">
+      Ant-Trail Route Map
+    </div>
+
+    <!-- Action buttons on right side of tab bar -->
+    <button class="expand-btn" (click)="openFullscreen()" title="Expand to full screen">
+      &#x26F6; Fullscreen
+    </button>
+    <button class="new-tab-btn" (click)="openInNewTab()" title="Open standalone HTML in new tab">
+      &#x29C9; New Tab
+    </button>
+  </div>
+
+  <div class="tab-content">
+    <div class="tab-pane" *ngIf="activeTab==='hop-tree'">
+      <app-hop-tree [dataset]="dataset"></app-hop-tree>
+    </div>
+    <div class="tab-pane" *ngIf="activeTab==='trail-map'">
+      <app-trail-map [dataset]="dataset"></app-trail-map>
+    </div>
+  </div>
+
+</ng-container>
+
+<!-- ── Fullscreen overlay ──────────────────────────────────────────────── -->
+<div class="fullscreen-overlay" *ngIf="isFullscreen">
+
+  <div class="fullscreen-header">
+    <span class="fullscreen-title">
+      {{ activeTab === 'hop-tree' ? 'LOGICAL HOP TREE' : 'ANT-TRAIL ROUTE MAP' }}
+      &nbsp;&middot;&nbsp; {{ dataset }}
+    </span>
+    <div class="ds-btn-group" style="margin-left:24px">
+      <button [class.active]="dataset==='MEADE'" (click)="setDataset('MEADE')">MEADE</button>
+      <button [class.active]="dataset==='DAI'"   (click)="setDataset('DAI')">DAI</button>
+      <button [class.active]="dataset==='ALL'"   (click)="setDataset('ALL')">ALL</button>
+    </div>
+    <button class="new-tab-btn" style="margin-left:12px" (click)="openInNewTab()">
+      &#x29C9; New Tab
+    </button>
+    <button class="fullscreen-close" (click)="closeFullscreen()">
+      &#x2715; Close
+    </button>
+  </div>
+
+  <div class="fullscreen-body">
+    <app-hop-tree  *ngIf="activeTab==='hop-tree'"  [dataset]="dataset"></app-hop-tree>
+    <app-trail-map *ngIf="activeTab==='trail-map'" [dataset]="dataset"></app-trail-map>
+  </div>
+
+</div>

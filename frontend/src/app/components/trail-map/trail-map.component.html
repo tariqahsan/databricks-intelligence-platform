@@ -1,0 +1,98 @@
+<!-- trail-map.component.html -->
+<div class="controls">
+  <span class="ctrl-label">FILTER</span>
+  <div class="btn-group">
+    <button [class.active]="latencyFilter==='all'"  (click)="setFilter('all')">ALL</button>
+    <button [class.active]="latencyFilter==='low'"  (click)="setFilter('low')">LOW &lt;3ms</button>
+    <button [class.active]="latencyFilter==='med'"  (click)="setFilter('med')">MED 3-10ms</button>
+    <button [class.active]="latencyFilter==='high'" (click)="setFilter('high')">HIGH &gt;10ms</button>
+  </div>
+  <input type="text" [(ngModel)]="searchTerm" (input)="applyFilters()" placeholder="Search node..." />
+  <span class="badge" style="margin-left:auto">{{ routeCount }} routes</span>
+</div>
+
+<!-- Debug bar: always visible, helps diagnose coordinate issues -->
+<div class="debug-bar">
+  Coords: {{ debugCoordsLoaded | number }} entries &nbsp;|&nbsp;
+  API pairs: {{ debugPairsReceived }} &nbsp;|&nbsp;
+  Routes built: {{ debugRoutesBuilt }}
+  <span *ngIf="coordsMissingCount > 0" style="color:#ffb74d">
+    &nbsp;| {{ coordsMissingCount }} missing coords
+  </span>
+</div>
+
+<!-- Loading state -->
+<ng-container *ngIf="loading">
+  <div class="loading-msg">
+    <div>Loading map data...</div>
+  </div>
+</ng-container>
+
+<!-- Map area — rendered even while loading so the div exists for Leaflet -->
+<div class="map-layout" [style.display]="loading ? 'none' : 'flex'">
+
+  <!-- Leaflet map wrapper — must have explicit dimensions -->
+  <div class="map-wrap">
+    <div id="trail-leaflet-map" #mapEl></div>
+  </div>
+
+  <!-- Node sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">CUSTOMER NODES</div>
+
+    <div class="node-list">
+      <div class="node-item"
+           *ngFor="let r of visibleRoutes"
+           [class.active]="selectedNode?.customerNode === r.customerNode"
+           (click)="selectNode(r)">
+        <div class="node-dot" [style.background]="latencyColor(r.latencyMs)"></div>
+        <div class="node-name" title="{{ r.customerNode }}">{{ r.customerNode }}</div>
+        <div class="node-lat" [style]="latencyStyle(r.latencyMs)">
+          {{ r.latencyMs | number:'1.2-2' }}ms
+        </div>
+      </div>
+
+      <!-- Empty state when no routes -->
+      <div *ngIf="!loading && visibleRoutes.length === 0"
+           style="padding:20px 12px;color:#5a7fa0;font-size:10px;font-family:monospace;text-align:center">
+        No routes found.<br/><br/>
+        Check debug bar above —<br/>
+        if Coords=0, replace<br/>
+        <b>assets/data/router-coordinates.json</b>
+      </div>
+    </div>
+
+    <!-- Detail panel -->
+    <div class="detail-panel" *ngIf="selectedNode">
+      <div class="d-name">
+        {{ selectedNode.customerNode }}
+        <span style="float:right;cursor:pointer;color:#5a7fa0" (click)="closeDetail()">&#x2715;</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-lbl">Avg Latency</span>
+        <span class="detail-val" [style]="latencyStyle(selectedNode.latencyMs)">
+          {{ selectedNode.latencyMs | number:'1.3-3' }} ms
+        </span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-lbl">Flow Count</span>
+        <span class="detail-val">{{ selectedNode.flowsThrough | number }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-lbl">Status</span>
+        <span class="detail-val" [style]="latencyStyle(selectedNode.latencyMs)">{{ selectedNode.linkHealth }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-lbl">Hub</span>
+        <span class="detail-val">{{ selectedNode.hubNode }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-lbl">Coordinates</span>
+        <span class="detail-val">
+          {{ selectedNode.customerLat | number:'1.4-4' }},
+          {{ selectedNode.customerLng | number:'1.4-4' }}
+        </span>
+      </div>
+    </div>
+  </div>
+</div>

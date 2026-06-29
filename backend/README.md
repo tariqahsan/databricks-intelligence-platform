@@ -65,3 +65,12 @@ In application.yml change ONE line:
   oe.datasource.gold-prefix: main.gold
 
 All 6 repositories update automatically. No SQL changes.
+
+#
+# Restart Spring Boot
+mvn spring-boot:run -Dspring-boot.run.profiles=thrift
+
+# Once started, test both viz endpoints
+curl "http://localhost:8091/api/network-flows/hop-tree?hub=UURWMEA110&dataset=MEADE&direction=inbound" -o hop_tree_test.html
+
+curl "http://localhost:8091/api/network-flows/trail-map?dataset=MEADE&direction=outbound" -o trail_map_test.html

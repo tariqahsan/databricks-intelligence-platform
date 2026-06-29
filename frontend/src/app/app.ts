@@ -32,6 +32,13 @@ export const routes: Routes = [
     title: 'Network Performance'
   },
   {
+    path: 'network-flows',
+    loadComponent: () =>
+      import('./components/network-flows/network-flows.component')
+        .then(m => m.NetworkFlowsComponent),
+    title: 'Network Flows'
+  },
+  {
     path: 'top-issues',
     loadComponent: () =>
       import('./components/top-issues/top-issues.component')
@@ -130,6 +137,12 @@ import { MatBadgeModule }      from '@angular/material/badge';
         <mat-icon matListItemIcon>network_check</mat-icon>
         <span matListItemTitle>Network Performance</span>
         <span matListItemMeta class="nav-source">NetScout</span>
+      </a>
+      <a mat-list-item routerLink="/network-flows"
+         routerLinkActive="nav-active">
+        <mat-icon matListItemIcon>hub</mat-icon>
+        <span matListItemTitle>Network Flows</span>
+        <span matListItemMeta class="nav-source">Netflow CSV</span>
       </a>
       <a mat-list-item routerLink="/top-issues"
          routerLinkActive="nav-active">
