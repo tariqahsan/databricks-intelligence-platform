@@ -42,7 +42,7 @@
     <!--
       JDK 21 compatibility flags for Hive JDBC 3.1.x.
       Hive was built for JDK 8 and uses deep reflection internally.
-      These add-opens directives grant Hive the access it needs
+      These add opens directives grant Hive the access it needs
       without recompiling or patching the Hive JAR.
 
       Applied to:
@@ -195,6 +195,12 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.poi</groupId>
+      <artifactId>poi-ooxml</artifactId>
+      <version>5.2.5</version>
     </dependency>
 
   </dependencies>

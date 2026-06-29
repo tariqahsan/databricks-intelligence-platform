@@ -81,14 +81,22 @@ oe:
   # dai-csv      : Filename of the DAI flow CSV (do not include path).
   # meade-csv    : Filename of the DISA Meade flow CSV.
   #
-  # AWS GovCloud transition: only data-dir changes (S3 mount point or
-  # local download path). Script names and all other keys are unchanged.
+  # coords-xlsx  : Path to master_dataframe_long.xlsx containing router
+  #                and customer site coordinates (Router/Latitude/Longitude).
+  #                Read once on first API call to /api/network-flows/coordinates
+  #                and cached in memory for the lifetime of the process.
+  #                Used by Angular trail map to draw ant-path routes.
+  #
+  # AWS GovCloud transition: only data-dir and coords-xlsx paths change
+  # (S3 mount point or local download path). Script names and all other
+  # keys are unchanged.
   network-flows:
     python-cmd:  python3
     scripts-dir: C:/Dev/MMA-Training/Artificial-Intelligence/databricks-intelligence-platform/oe-ingestion-pipeline
     data-dir:    C:/Dev/MMA-Training/Artificial-Intelligence/databricks-intelligence-platform/oe-ingestion-pipeline/mock-logs/network_flows
     dai-csv:     All_Complete_Flows_DAI.csv
     meade-csv:   All_Complete_Flows_DISA_Meade.csv
+    coords-xlsx: C:/Dev/MMA-Training/Artificial-Intelligence/databricks-intelligence-platform/oe-ingestion-pipeline/master_dataframe_long.xlsx
 
 logging:
   level:
