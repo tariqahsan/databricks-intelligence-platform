@@ -1,7 +1,6 @@
 # OE Data Intelligence Platform — Local Databricks-Equivalent Stack
 
 services:
-
   spark-master:
     image: apache/spark:3.5.3
     container_name: oe-spark-master
@@ -103,35 +102,43 @@ services:
       --conf spark.sql.shuffle.partitions=4
       --conf spark.driver.memory=2g
 
+  # ── FIXED: Indented with exactly 2 spaces, aligned with other services ──
   jupyter:
     image: jupyter/pyspark-notebook:spark-3.5.0
     container_name: oe-jupyter
     hostname: jupyter
+    user: root
     environment:
       - JUPYTER_TOKEN=databricks
-      # Use local[2] — avoids Spark 3.5.0 (Jupyter) vs 3.5.3
-      # (worker) version mismatch that causes InvalidClassException
-      - SPARK_MASTER=local[2]
+      - SPARK_MASTER=local
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
       - AWS_ENDPOINT_URL=http://minio:9000
-      # Eliminates all sys.path hacks in Python scripts:
-      #   project root → finds pipelines package + run_pipeline.py
-      #   project/src  → finds spark_session module
       - PYTHONPATH=/home/jovyan/project:/home/jovyan/project/src
+      - CHOWN_LIMITS=yes
     ports:
       - "8888:8888"
       - "4040:4040"
     volumes:
-      # Single project-root bind mount — no individual file mounts
       - .:/home/jovyan/project
-      # Mount into before-notebook.d so the image automatically runs
-      # pip install BEFORE launching JupyterLab on every container start
-      - ./start-jupyter.sh:/usr/local/bin/before-notebook.d/00-install-deps.sh
     working_dir: /home/jovyan/project
-    # start.sh runs before-notebook.d scripts then launches jupyter.
-    # --notebook-dir opens JupyterLab at the project root by default.
-    command: start.sh jupyter lab --notebook-dir=/home/jovyan/project
+    command: >
+      bash -c "
+      echo '==========================================================' &&
+      echo '  OE Platform — installing Python dependencies...' &&
+      echo '==========================================================' &&
+      pip install --no-cache-dir \
+        --trusted-host pypi.org \
+        --trusted-host pypi.python.org \
+        --trusted-host files.pythonhosted.org \
+        delta-spark==3.2.0 \
+        boto3==1.34.0 \
+        s3fs==2024.2.0 \
+        pyspark==3.5.0 &&
+      echo '  ✅ delta-spark, boto3, s3fs ready' &&
+      echo '==========================================================' &&
+      start.sh jupyter lab --notebook-dir=/home/jovyan/project
+      "
     depends_on:
       spark-master:
         condition: service_healthy
